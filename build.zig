@@ -138,11 +138,11 @@ pub fn build(b: *std.Build) !void {
 
         // We shouldn't have this guard but we don't currently
         // build on macOS this way ironically so we need to fix that.
-        if (!config.target.result.os.tag.isDarwin()) {
-            libghostty_shared.installHeader(); // Only need one header
-            libghostty_shared.install("libghostty.so");
-            libghostty_static.install("libghostty.a");
-        }
+        const shared_lib_ext = if (config.target.result.os.tag.isDarwin()) "libghostty.dylib" else "libghostty.so";
+        
+        libghostty_shared.installHeader(); // Only need one header
+        libghostty_shared.install(shared_lib_ext);
+        libghostty_static.install("libghostty.a");
     }
 
     // macOS only artifacts. These will error if they're initialized for

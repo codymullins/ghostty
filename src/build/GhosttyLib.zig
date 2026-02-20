@@ -86,6 +86,14 @@ pub fn initShared(
         // Fails on self-hosted x86_64
         .use_llvm = true,
     });
+    if (deps.config.target.result.os.tag.isDarwin()) {
+        const frameworks = &.{
+            "Foundation", "Cocoa", "AppKit", "Metal", "MetalKit",
+            "QuartzCore", "CoreVideo", "CoreGraphics", "IOSurface",
+        };
+        inline for (frameworks) |fw| lib.linkFramework(fw);
+    }
+    
     _ = try deps.add(lib);
 
     // Get our debug symbols
