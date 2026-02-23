@@ -23,7 +23,7 @@ pub fn main() !void {
     try genConfig(alloc, writer);
     try genActions(alloc, writer);
     try genKeybindActions(alloc, writer);
-    try stdout.end();
+    try writer.flush();
 }
 
 fn genConfig(alloc: std.mem.Allocator, writer: *std.Io.Writer) !void {
