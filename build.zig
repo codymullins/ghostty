@@ -138,7 +138,7 @@ pub fn build(b: *std.Build) !void {
 
         // We shouldn't have this guard but we don't currently
         // build on macOS this way ironically so we need to fix that.
-        const shared_lib_ext = if (config.target.result.os.tag.isDarwin()) "libghostty.dylib" else "libghostty.so";
+        const shared_lib_ext = if (config.target.result.os.tag.isDarwin()) "libghostty.dylib" else if (config.target.result.os.tag == .windows) "ghostty.dll" else "libghostty.so";
         
         libghostty_shared.installHeader(); // Only need one header
         libghostty_shared.install(shared_lib_ext);
