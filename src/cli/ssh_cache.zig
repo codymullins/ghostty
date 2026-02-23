@@ -95,23 +95,17 @@ pub fn runInner(
     }
 
     if (opts.add) |host| {
-        const result = cache.add(alloc, host) catch |err| switch (err) {
-            DiskCache.Error.HostnameIsInvalid => {
+        const result = cache.add(alloc, host) catch |err2| {
+            if (err2 == error.HostnameIsInvalid) {
                 try stderr.print("Error: Invalid hostname format '{s}'\n", .{host});
                 try stderr.print("Expected format: hostname or user@hostname\n", .{});
                 return 1;
-            },
-            DiskCache.Error.CacheIsLocked => {
-                try stderr.print("Error: Cache is busy, try again\n", .{});
-                return 1;
-            },
-            else => {
-                try stderr.print(
-                    "Error: Unable to add '{s}' to cache. Error: {}\n",
-                    .{ host, err },
-                );
-                return 1;
-            },
+            }
+            try stderr.print(
+                "Error: Unable to add '{s}' to cache. Error: {}\n",
+                .{ host, err2 },
+            );
+            return 1;
         };
 
         switch (result) {
@@ -122,23 +116,17 @@ pub fn runInner(
     }
 
     if (opts.remove) |host| {
-        cache.remove(alloc, host) catch |err| switch (err) {
-            DiskCache.Error.HostnameIsInvalid => {
+        cache.remove(alloc, host) catch |e| {
+            if (e == error.HostnameIsInvalid) {
                 try stderr.print("Error: Invalid hostname format '{s}'\n", .{host});
                 try stderr.print("Expected format: hostname or user@hostname\n", .{});
                 return 1;
-            },
-            DiskCache.Error.CacheIsLocked => {
-                try stderr.print("Error: Cache is busy, try again\n", .{});
-                return 1;
-            },
-            else => {
-                try stderr.print(
-                    "Error: Unable to remove '{s}' from cache. Error: {}\n",
-                    .{ host, err },
-                );
-                return 1;
-            },
+            }
+            try stderr.print(
+                "Error: Unable to remove '{s}' from cache. Error: {}\n",
+                .{ host, e },
+            );
+            return 1;
         };
         try stdout.print("Removed '{s}' from cache.\n", .{host});
         return 0;

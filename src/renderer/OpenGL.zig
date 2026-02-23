@@ -12,6 +12,68 @@ const configpkg = @import("../config.zig");
 const rendererpkg = @import("../renderer.zig");
 const Renderer = rendererpkg.GenericRenderer(OpenGL);
 
+const wgl = if (builtin.os.tag == .windows) struct {
+    pub const HDC = *anyopaque;
+    pub const HGLRC = *anyopaque;
+    pub const HWND = *anyopaque;
+
+    pub const PFD_DRAW_TO_WINDOW = 0x00000004;
+    pub const PFD_SUPPORT_OPENGL = 0x00000020;
+    pub const PFD_DOUBLEBUFFER = 0x00000001;
+    pub const PFD_TYPE_RGBA = 0;
+    pub const PFD_MAIN_PLANE = 0;
+
+    pub const PIXELFORMATDESCRIPTOR = extern struct {
+        nSize: u16 = @sizeOf(PIXELFORMATDESCRIPTOR),
+        nVersion: u16 = 1,
+        dwFlags: u32,
+        iPixelType: u8,
+        cColorBits: u8,
+        cRedBits: u8 = 0,
+        cRedShift: u8 = 0,
+        cGreenBits: u8 = 0,
+        cGreenShift: u8 = 0,
+        cBlueBits: u8 = 0,
+        cBlueShift: u8 = 0,
+        cAlphaBits: u8 = 0,
+        cAlphaShift: u8 = 0,
+        cAccumBits: u8 = 0,
+        cAccumRedBits: u8 = 0,
+        cAccumGreenBits: u8 = 0,
+        cAccumBlueBits: u8 = 0,
+        cAccumAlphaBits: u8 = 0,
+        cDepthBits: u8,
+        cStencilBits: u8,
+        cAuxBuffers: u8 = 0,
+        iLayerType: u8,
+        bReserved: u8 = 0,
+        dwLayerMask: u32 = 0,
+        dwVisibleMask: u32 = 0,
+        dwDamageMask: u32 = 0,
+    };
+
+    pub extern "user32" fn GetDC(hWnd: HWND) ?HDC;
+    pub extern "user32" fn ReleaseDC(hWnd: HWND, hDC: HDC) c_int;
+    pub extern "gdi32" fn ChoosePixelFormat(hDC: HDC, ppfd: *const PIXELFORMATDESCRIPTOR) c_int;
+    pub extern "gdi32" fn SetPixelFormat(hDC: HDC, format: c_int, ppfd: *const PIXELFORMATDESCRIPTOR) c_int;
+    pub extern "gdi32" fn SwapBuffers(hDC: HDC) c_int;
+
+    pub extern "opengl32" fn wglCreateContext(hDC: HDC) ?HGLRC;
+    pub extern "opengl32" fn wglMakeCurrent(hDC: HDC, hglrc: ?HGLRC) c_int;
+    pub extern "opengl32" fn wglDeleteContext(hglrc: HGLRC) c_int;
+    pub extern "opengl32" fn wglGetProcAddress(name: [*:0]const u8) ?*anyopaque;
+    
+    // Fallback for getting OpenGL proc addresses
+    pub extern "kernel32" fn GetModuleHandleA(lpModuleName: [*:0]const u8) ?*anyopaque;
+    pub extern "kernel32" fn GetProcAddress(hModule: ?*anyopaque, lpProcName: [*:0]const u8) ?*anyopaque;
+
+    pub fn getProcAddress(name: [*:0]const u8) ?*anyopaque {
+        if (wglGetProcAddress(name)) |p| return p;
+        const opengl32 = GetModuleHandleA("opengl32.dll");
+        return GetProcAddress(opengl32, name);
+    }
+} else struct {};
+
 pub const GraphicsAPI = OpenGL;
 pub const Target = @import("opengl/Target.zig");
 pub const Frame = @import("opengl/Frame.zig");
@@ -42,16 +104,63 @@ alloc: std.mem.Allocator,
 /// Alpha blending mode
 blending: configpkg.Config.AlphaBlending,
 
+/// Windows Device Context
+hdc: ?*anyopaque = null,
+
+/// Windows GL Rendering Context
+hglrc: ?*anyopaque = null,
+
 /// The most recently presented target, in case we need to present it again.
 last_target: ?Target = null,
 
-/// NOTE: This is an error{}!OpenGL instead of just OpenGL for parity with
-///       Metal, since it needs to be fallible so does this, even though it
-///       can't actually fail.
-pub fn init(alloc: Allocator, opts: rendererpkg.Options) error{}!OpenGL {
+pub fn init(alloc: Allocator, opts: rendererpkg.Options) !OpenGL {
+    var hdc_out: ?*anyopaque = null;
+    var hglrc_out: ?*anyopaque = null;
+
+    switch (apprt.runtime) {
+        else => @compileError("unsupported app runtime for OpenGL"),
+
+        apprt.gtk => try prepareContext(null),
+
+        apprt.embedded => {
+            if (comptime builtin.os.tag == .windows) {
+                const hwnd = opts.rt_surface.platform.windows.hwnd;
+                const hdc = wgl.GetDC(hwnd) orelse return error.GetDCFailed;
+                
+                var pfd = wgl.PIXELFORMATDESCRIPTOR{
+                    .dwFlags = wgl.PFD_DRAW_TO_WINDOW | wgl.PFD_SUPPORT_OPENGL | wgl.PFD_DOUBLEBUFFER,
+                    .iPixelType = wgl.PFD_TYPE_RGBA,
+                    .cColorBits = 32,
+                    .cDepthBits = 24,
+                    .cStencilBits = 8,
+                    .iLayerType = wgl.PFD_MAIN_PLANE,
+                };
+
+                const pixel_format = wgl.ChoosePixelFormat(hdc, &pfd);
+                if (pixel_format == 0) return error.ChoosePixelFormatFailed;
+
+                if (wgl.SetPixelFormat(hdc, pixel_format, &pfd) == 0) return error.SetPixelFormatFailed;
+
+                const hglrc = wgl.wglCreateContext(hdc) orelse return error.CreateContextFailed;
+                if (wgl.wglMakeCurrent(hdc, hglrc) == 0) return error.MakeCurrentFailed;
+                
+                hdc_out = hdc;
+                hglrc_out = hglrc;
+
+                try prepareContext(wgl.getProcAddress);
+            } else {
+                // TODO(mitchellh): this does nothing today to allow libghostty
+                // to compile for OpenGL targets but libghostty is strictly
+                // broken for rendering on this platforms.
+            }
+        },
+    }
+
     return .{
         .alloc = alloc,
         .blending = opts.config.blending,
+        .hdc = hdc_out,
+        .hglrc = hglrc_out,
     };
 }
 
@@ -167,12 +276,10 @@ pub fn surfaceInit(surface: *apprt.Surface) !void {
 
         // GTK uses global OpenGL context so we load from null.
         apprt.gtk,
-        => try prepareContext(null),
+        => {},
 
         apprt.embedded => {
-            // TODO(mitchellh): this does nothing today to allow libghostty
-            // to compile for OpenGL targets but libghostty is strictly
-            // broken for rendering on this platforms.
+            // Doing nothing here. WGL instantiation moved to OpenGL.init
         },
     }
 
@@ -195,7 +302,6 @@ pub fn finalizeSurfaceInit(self: *const OpenGL, surface: *apprt.Surface) !void {
 
 /// Callback called by renderer.Thread when it begins.
 pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
-    _ = self;
     _ = surface;
 
     switch (apprt.runtime) {
@@ -209,17 +315,21 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
         },
 
         apprt.embedded => {
-            // TODO(mitchellh): this does nothing today to allow libghostty
-            // to compile for OpenGL targets but libghostty is strictly
-            // broken for rendering on this platforms.
+            if (comptime builtin.os.tag == .windows) {
+                if (wgl.wglMakeCurrent(self.hdc.?, self.hglrc.?) == 0) {
+                    return error.MakeCurrentFailed;
+                }
+            } else {
+                // TODO(mitchellh): this does nothing today to allow libghostty
+                // to compile for OpenGL targets but libghostty is strictly
+                // broken for rendering on this platforms.
+            }
         },
     }
 }
 
 /// Callback called by renderer.Thread when it exits.
 pub fn threadExit(self: *const OpenGL) void {
-    _ = self;
-
     switch (apprt.runtime) {
         else => @compileError("unsupported app runtime for OpenGL"),
 
@@ -229,7 +339,13 @@ pub fn threadExit(self: *const OpenGL) void {
         },
 
         apprt.embedded => {
-            // TODO: see threadEnter
+            if (comptime builtin.os.tag == .windows) {
+                _ = wgl.wglMakeCurrent(undefined, null);
+                _ = wgl.wglDeleteContext(self.hglrc.?);
+                // Note: Not releasing HDC here because the window might still exist,
+                // and CS_OWNDC windows don't need ReleaseDC. The window lifecycle
+                // owns the HDC unless we are certain it's a temp DC.
+            }
         },
     }
 }
@@ -325,6 +441,11 @@ pub fn present(self: *OpenGL, target: Target) !void {
         gl.c.GL_COLOR_BUFFER_BIT,
         gl.c.GL_NEAREST,
     );
+    
+    // On Windows, swap buffers to display
+    if (comptime builtin.os.tag == .windows) {
+        _ = wgl.SwapBuffers(self.hdc.?);
+    }
 
     // Keep track of this target in case we need to repeat it.
     self.last_target = target;

@@ -101,7 +101,11 @@ fn stepNoop(ptr: *anyopaque) Benchmark.Error!void {
     _ = ptr;
 }
 
-extern "c" fn wcwidth(c: u32) c_int;
+const wcwidth = if (@import("builtin").os.tag == .windows) struct {
+    fn fallback(c: u32) c_int { _ = c; return 1; }
+}.fallback else struct {
+    extern "c" fn wcwidth(c: u32) c_int;
+}.wcwidth;
 
 fn stepWcwidth(ptr: *anyopaque) Benchmark.Error!void {
     const self: *CodepointWidth = @ptrCast(@alignCast(ptr));

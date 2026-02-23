@@ -92,6 +92,10 @@ pub fn initShared(
             "QuartzCore", "CoreVideo", "CoreGraphics", "IOSurface",
         };
         inline for (frameworks) |fw| lib.linkFramework(fw);
+    } else if (deps.config.target.result.os.tag == .windows) {
+        lib.linkSystemLibrary("user32");
+        lib.linkSystemLibrary("gdi32");
+        lib.linkSystemLibrary("opengl32");
     }
     
     _ = try deps.add(lib);
